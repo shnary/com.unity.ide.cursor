@@ -576,8 +576,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 					// Path.Combine(projectPath, ".cursor", "rules"),
 					// Path.Combine(projectPath, ".vscode", "cursor-rules.md"),
 					// Path.Combine(projectPath, "cursor-rules.md")
-				};				};
-
+				};
 				foreach (var rulesFile in cursorRulesFiles)
 				{
 					if (File.Exists(rulesFile))
