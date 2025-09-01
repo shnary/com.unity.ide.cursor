@@ -570,11 +570,7 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			var directory = IOPath.GetDirectoryName(solution);
 			var application = Path;
 
-			// PERFORMANCE FIX: Ensure Cursor Rules are accessible before opening
-			// This fixes the issue where Cursor Rules are not read on first Unity file opening
-			// Checks for .md files in PROJECT_PATH\.cursor\ directory
-			ProcessRunner.EnsureCursorRulesAccessible(directory);
-
+			// Check if there's already a Cursor instance with this workspace
 			var existingProcess = FindRunningCursorWithSolution(directory);
 			if (existingProcess != null) {
 				try {
@@ -589,25 +585,32 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 				catch (Exception ex) {
 					Debug.LogError($"[Cursor] Error using existing instance: {ex}");
 				}
+				finally {
+					try { existingProcess.Dispose(); } catch { }
+				}
 			}
 
-			// No matching workspace window. Decide whether to force a new window.
-			var anyCursorRunning = GetCursorProcesses().Any();
-			var firstArgs = anyCursorRunning
-				? $"--new-window \"{directory}\""
-				: $"--reuse-window \"{directory}\"";
+			// No matching workspace window - always create a new window
+			// This ensures we don't interfere with other workspaces
+			var firstArgs = $"--new-window \"{directory}\"";
 
 			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, firstArgs));
 
 			// After opening the workspace, wait until it's detected, then navigate to the file.
+			// Also ensure cursor rules are loaded by giving Cursor time to initialize
 			if (!string.IsNullOrEmpty(path)) {
 				_ = Task.Run(async () => {
 					try {
-						var ready = await WaitForWorkspaceReadyAsync(directory, timeoutMs: 6000).ConfigureAwait(false);
+						// Give Cursor time to initialize and load rules
+						var ready = await WaitForWorkspaceReadyAsync(directory, timeoutMs: 8000).ConfigureAwait(false);
 						if (!ready) {
-							// Fallback small delay if detection failed but app likely started
-							await Task.Delay(800).ConfigureAwait(false);
+							// Fallback delay if detection failed but app likely started
+							// This extra time helps ensure cursor rules are loaded
+							await Task.Delay(1500).ConfigureAwait(false);
 						}
+
+						// Check cursor rules after workspace is ready
+						ProcessRunner.EnsureCursorRulesAccessible(directory);
 
 						var secondArgs = $"--reuse-window \"{directory}\" -g \"{path}\":{line}:{column}";
 						await ProcessRunner.StartAsync(ProcessStartInfoFor(application, secondArgs));
@@ -615,6 +618,13 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 					catch (Exception ex) {
 						Debug.LogError($"[Cursor] Error opening file after workspace init: {ex}");
 					}
+				});
+			}
+			else {
+				// Even when not opening a specific file, ensure rules are accessible
+				_ = Task.Run(async () => {
+					await Task.Delay(2000).ConfigureAwait(false);
+					ProcessRunner.EnsureCursorRulesAccessible(directory);
 				});
 			}
 

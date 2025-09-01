@@ -585,13 +585,11 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 			try
 			{
-				Debug.Log("Checking for Cursor rules in " + projectPath);
 				var cursorDir = Path.Combine(projectPath, ".cursor", "rules");
 				
 				// Fast directory existence check
 				if (!Directory.Exists(cursorDir))
 				{
-					Debug.Log("No Cursor rules found in " + projectPath);
 					// Cache negative result immediately
 					_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
 					return false;
@@ -599,17 +597,39 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 				try
 				{
-					// Ultra-fast check: just see if any .md file exists
-					var mdFiles = Directory.EnumerateFiles(cursorDir, "*.mdc", SearchOption.TopDirectoryOnly);
-					var firstMdFile = mdFiles.FirstOrDefault();
+					// Check for any .mdc files
+					var mdcFiles = Directory.EnumerateFiles(cursorDir, "*.mdc", SearchOption.TopDirectoryOnly).ToList();
 					
-					if (firstMdFile != null)
+					if (mdcFiles.Any())
 					{
-						// Touch the file to ensure it's accessible (async to not block)
+						// Touch all rule files to ensure they're accessible (async to not block)
 						Task.Run(() => {
-							try { File.SetLastAccessTime(firstMdFile, DateTime.Now); }
-							catch { /* Ignore touch errors */ }
+							foreach (var file in mdcFiles)
+							{
+								try 
+								{ 
+									// Update both access time and write time to ensure Cursor notices the files
+									var now = DateTime.Now;
+									File.SetLastAccessTime(file, now);
+									File.SetLastWriteTime(file, now);
+								}
+								catch { /* Ignore touch errors */ }
+							}
 						});
+						
+						// Also check the parent .cursor directory to ensure it's accessible
+						var cursorParentDir = Path.GetDirectoryName(cursorDir);
+						if (Directory.Exists(cursorParentDir))
+						{
+							Task.Run(() => {
+								try 
+								{ 
+									// Touch the .cursor directory itself
+									Directory.SetLastWriteTime(cursorParentDir, DateTime.Now);
+								}
+								catch { /* Ignore errors */ }
+							});
+						}
 						
 						// Cache positive result
 						_cursorRulesCache[projectPath] = (true, DateTime.UtcNow);
