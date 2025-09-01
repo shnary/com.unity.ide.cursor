@@ -511,27 +511,7 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			return processes;
 		}
 
-		/// <summary>
-		/// Waits until a Cursor window is detected with the requested workspace.
-		/// </summary>
-		private async Task<bool> WaitForWorkspaceReadyAsync(string solutionPath, int timeoutMs = 5000) {
-			var sw = Stopwatch.StartNew();
-			while (sw.ElapsedMilliseconds < timeoutMs) {
-				Process detected = null;
-				try {
-					detected = FindRunningCursorWithSolution(solutionPath);
-					if (detected != null)
-						return true;
-				}
-				finally {
-					try { detected?.Dispose(); } catch { }
-				}
 
-				await Task.Delay(250).ConfigureAwait(false);
-			}
-
-			return false;
-		}
 		
 		/// <summary>
 		/// Normalizes file paths for consistent comparison
@@ -574,11 +554,11 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			var existingProcess = FindRunningCursorWithSolution(directory);
 			if (existingProcess != null) {
 				try {
+					// Found matching workspace - reuse the window
 					var args = string.IsNullOrEmpty(path) ? 
 						$"--reuse-window \"{directory}\"" : 
 						$"--reuse-window -g \"{path}\":{line}:{column}";
 					
-					// Use async version for better performance
 					_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, args));
 					return true;
 				}
@@ -590,42 +570,17 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 				}
 			}
 
-			// No matching workspace window - always create a new window
-			// This ensures we don't interfere with other workspaces
-			var firstArgs = $"--new-window \"{directory}\"";
+			// No matching workspace window found
+			// First, open the workspace folder to ensure proper initialization (like "Open Folder" in Cursor)
+			// This is critical for cursor rules to be recognized
+			var workspaceArgs = $"--new-window \"{directory}\"";
+			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, workspaceArgs));
 
-			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, firstArgs));
-
-			// After opening the workspace, wait until it's detected, then navigate to the file.
-			// Also ensure cursor rules are loaded by giving Cursor time to initialize
+			// If we need to open a specific file, do it as a separate command after workspace opens
+			// This mimics the behavior of opening folder first, then opening file
 			if (!string.IsNullOrEmpty(path)) {
-				_ = Task.Run(async () => {
-					try {
-						// Give Cursor time to initialize and load rules
-						var ready = await WaitForWorkspaceReadyAsync(directory, timeoutMs: 8000).ConfigureAwait(false);
-						if (!ready) {
-							// Fallback delay if detection failed but app likely started
-							// This extra time helps ensure cursor rules are loaded
-							await Task.Delay(1500).ConfigureAwait(false);
-						}
-
-						// Check cursor rules after workspace is ready
-						ProcessRunner.EnsureCursorRulesAccessible(directory);
-
-						var secondArgs = $"--reuse-window \"{directory}\" -g \"{path}\":{line}:{column}";
-						await ProcessRunner.StartAsync(ProcessStartInfoFor(application, secondArgs));
-					}
-					catch (Exception ex) {
-						Debug.LogError($"[Cursor] Error opening file after workspace init: {ex}");
-					}
-				});
-			}
-			else {
-				// Even when not opening a specific file, ensure rules are accessible
-				_ = Task.Run(async () => {
-					await Task.Delay(2000).ConfigureAwait(false);
-					ProcessRunner.EnsureCursorRulesAccessible(directory);
-				});
+				var fileArgs = $"-g \"{path}\":{line}:{column}";
+				_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, fileArgs));
 			}
 
 			return true;
