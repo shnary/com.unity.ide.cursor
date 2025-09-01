@@ -570,13 +570,13 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			try
 			{
 				// Common Cursor rules file locations
-				var cursorRulesFiles = new[]
-				{
-					Path.Combine(projectPath, ".cursorrules"),
-					Path.Combine(projectPath, ".cursor", "rules"),
-					Path.Combine(projectPath, ".vscode", "cursor-rules.md"),
-					Path.Combine(projectPath, "cursor-rules.md")
-				};
+				var cursorRulesFiles = new[] {
+					Path.Combine(projectPath, ".cursor"),
+					// Path.Combine(projectPath, ".cursorrules"),
+					// Path.Combine(projectPath, ".cursor", "rules"),
+					// Path.Combine(projectPath, ".vscode", "cursor-rules.md"),
+					// Path.Combine(projectPath, "cursor-rules.md")
+				};				};
 
 				foreach (var rulesFile in cursorRulesFiles)
 				{
