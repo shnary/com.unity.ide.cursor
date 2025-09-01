@@ -13,6 +13,7 @@ using UnityEngine;
 using SimpleJSON;
 using IOPath = System.IO.Path;
 using Debug = UnityEngine.Debug;
+using System.Threading.Tasks;
 
 namespace Microsoft.Unity.VisualStudio.Editor {
 	internal class VisualStudioCursorInstallation : VisualStudioInstallation {
@@ -509,6 +510,28 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			
 			return processes;
 		}
+
+		/// <summary>
+		/// Waits until a Cursor window is detected with the requested workspace.
+		/// </summary>
+		private async Task<bool> WaitForWorkspaceReadyAsync(string solutionPath, int timeoutMs = 5000) {
+			var sw = Stopwatch.StartNew();
+			while (sw.ElapsedMilliseconds < timeoutMs) {
+				Process detected = null;
+				try {
+					detected = FindRunningCursorWithSolution(solutionPath);
+					if (detected != null)
+						return true;
+				}
+				finally {
+					try { detected?.Dispose(); } catch { }
+				}
+
+				await Task.Delay(250).ConfigureAwait(false);
+			}
+
+			return false;
+		}
 		
 		/// <summary>
 		/// Normalizes file paths for consistent comparison
@@ -568,12 +591,33 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 				}
 			}
 
-			var newArgs = string.IsNullOrEmpty(path) ?
-				$"--new-window \"{directory}\"" :
-				$"--new-window \"{directory}\" -g \"{path}\":{line}:{column}";
-			
-			// Use async version for better performance
-			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, newArgs));
+			// No matching workspace window. Decide whether to force a new window.
+			var anyCursorRunning = GetCursorProcesses().Any();
+			var firstArgs = anyCursorRunning
+				? $"--new-window \"{directory}\""
+				: $"--reuse-window \"{directory}\"";
+
+			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, firstArgs));
+
+			// After opening the workspace, wait until it's detected, then navigate to the file.
+			if (!string.IsNullOrEmpty(path)) {
+				_ = Task.Run(async () => {
+					try {
+						var ready = await WaitForWorkspaceReadyAsync(directory, timeoutMs: 6000).ConfigureAwait(false);
+						if (!ready) {
+							// Fallback small delay if detection failed but app likely started
+							await Task.Delay(800).ConfigureAwait(false);
+						}
+
+						var secondArgs = $"--reuse-window \"{directory}\" -g \"{path}\":{line}:{column}";
+						await ProcessRunner.StartAsync(ProcessStartInfoFor(application, secondArgs));
+					}
+					catch (Exception ex) {
+						Debug.LogError($"[Cursor] Error opening file after workspace init: {ex}");
+					}
+				});
+			}
+
 			return true;
 		}
 

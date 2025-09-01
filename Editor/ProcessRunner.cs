@@ -600,7 +600,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				try
 				{
 					// Ultra-fast check: just see if any .md file exists
-					var mdFiles = Directory.EnumerateFiles(cursorDir, "*.md", SearchOption.TopDirectoryOnly);
+					var mdFiles = Directory.EnumerateFiles(cursorDir, "*.mdc", SearchOption.TopDirectoryOnly);
 					var firstMdFile = mdFiles.FirstOrDefault();
 					
 					if (firstMdFile != null)
