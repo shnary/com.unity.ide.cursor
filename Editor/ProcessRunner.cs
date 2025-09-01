@@ -54,7 +54,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			if (string.IsNullOrWhiteSpace(filename))
 				throw new ArgumentException("Filename cannot be null or empty", nameof(filename));
 			
-			return new ProcessStartInfo
+			var processStartInfo = new ProcessStartInfo
 			{
 				UseShellExecute = shell,
 				CreateNoWindow = true,
@@ -64,10 +64,17 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				Arguments = arguments ?? string.Empty,
 				// Performance optimizations
 				WindowStyle = ProcessWindowStyle.Hidden,
-				WorkingDirectory = Environment.CurrentDirectory,
-				StandardOutputEncoding = System.Text.Encoding.UTF8,
-				StandardErrorEncoding = System.Text.Encoding.UTF8
+				WorkingDirectory = Environment.CurrentDirectory
 			};
+			
+			// Only set encoding when redirecting output/error streams
+			if (redirect)
+			{
+				processStartInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
+				processStartInfo.StandardErrorEncoding = System.Text.Encoding.UTF8;
+			}
+			
+			return processStartInfo;
 		}
 
 		public static void Start(string filename, string arguments)
