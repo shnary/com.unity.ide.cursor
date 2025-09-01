@@ -1,4 +1,4 @@
-﻿/*---------------------------------------------------------------------------------------------
+/*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
@@ -449,62 +449,95 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			}
 		}
 
+		/// <summary>
+		/// High-performance method to find running Cursor instance with solution
+		/// </summary>
 		private Process FindRunningCursorWithSolution(string solutionPath) {
-			var normalizedTargetPath = solutionPath.Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
+			if (string.IsNullOrWhiteSpace(solutionPath))
+				return null;
 			
-#if UNITY_EDITOR_WIN
-			// Keep as is for Windows platform since path already includes drive letter
-#else
-			// Ensure path starts with / for macOS and Linux platforms
-			if (!normalizedTargetPath.StartsWith("/")) {
-				normalizedTargetPath = "/" + normalizedTargetPath;
-			}
-#endif
+			var normalizedTargetPath = NormalizePath(solutionPath);
+			var processes = GetCursorProcesses();
 			
-			var processes = new List<Process>();
-			
-			// Get process name list based on different operating systems
-#if UNITY_EDITOR_OSX
-			processes.AddRange(Process.GetProcessesByName("Cursor"));
-			processes.AddRange(Process.GetProcessesByName("Cursor Helper"));
-#elif UNITY_EDITOR_LINUX
-			processes.AddRange(Process.GetProcessesByName("cursor"));
-			processes.AddRange(Process.GetProcessesByName("Cursor"));
-#else
-			processes.AddRange(Process.GetProcessesByName("cursor"));
-#endif
-			
-			foreach (var process in processes) {
+			// Use parallel processing for faster process checking
+			var matchingProcess = processes.AsParallel().FirstOrDefault(process => {
 				try {
 					var workspaces = ProcessRunner.GetProcessWorkspaces(process);
-					if (workspaces != null && workspaces.Length > 0) {
-						foreach (var workspace in workspaces) {
-							var normalizedWorkspaceDir = workspace.Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
-							
-#if UNITY_EDITOR_WIN
-							// Keep as is for Windows platform
-#else
-							// Ensure path starts with / for macOS and Linux platforms
-							if (!normalizedWorkspaceDir.StartsWith("/")) {
-								normalizedWorkspaceDir = "/" + normalizedWorkspaceDir;
-							}
-#endif
-
-							if (string.Equals(normalizedWorkspaceDir, normalizedTargetPath, StringComparison.OrdinalIgnoreCase) ||
-								normalizedTargetPath.StartsWith(normalizedWorkspaceDir + "/", StringComparison.OrdinalIgnoreCase) ||
-								normalizedWorkspaceDir.StartsWith(normalizedTargetPath + "/", StringComparison.OrdinalIgnoreCase))
-							{
-								return process;
-							}
-						}
-					}
+					if (workspaces == null || workspaces.Length == 0)
+						return false;
+						
+					return workspaces.Any(workspace => {
+						var normalizedWorkspaceDir = NormalizePath(workspace);
+						return IsPathMatch(normalizedWorkspaceDir, normalizedTargetPath);
+					});
 				}
 				catch (Exception ex) {
-					Debug.LogError($"[Cursor] Error checking process: {ex}");
-					continue;
+					Debug.LogWarning($"[Cursor] Error checking process {process.Id}: {ex.Message}");
+					return false;
 				}
+			});
+			
+			// Dispose unused processes
+			foreach (var process in processes.Where(p => p != matchingProcess)) {
+				try { process.Dispose(); } catch { /* ignore */ }
 			}
-			return null;
+			
+			return matchingProcess;
+		}
+		
+		/// <summary>
+		/// Gets all Cursor processes efficiently
+		/// </summary>
+		private List<Process> GetCursorProcesses() {
+			var processes = new List<Process>();
+			
+			try {
+				// Get process name list based on different operating systems
+#if UNITY_EDITOR_OSX
+				processes.AddRange(Process.GetProcessesByName("Cursor"));
+				processes.AddRange(Process.GetProcessesByName("Cursor Helper"));
+#elif UNITY_EDITOR_LINUX
+				processes.AddRange(Process.GetProcessesByName("cursor"));
+				processes.AddRange(Process.GetProcessesByName("Cursor"));
+#else
+				processes.AddRange(Process.GetProcessesByName("cursor"));
+#endif
+			}
+			catch (Exception ex) {
+				Debug.LogError($"[Cursor] Error getting Cursor processes: {ex.Message}");
+			}
+			
+			return processes;
+		}
+		
+		/// <summary>
+		/// Normalizes file paths for consistent comparison
+		/// </summary>
+		private static string NormalizePath(string path) {
+			if (string.IsNullOrWhiteSpace(path))
+				return string.Empty;
+				
+			var normalized = path.Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
+			
+#if !UNITY_EDITOR_WIN
+			// Ensure path starts with / for macOS and Linux platforms
+			if (!normalized.StartsWith("/")) {
+				normalized = "/" + normalized;
+			}
+#endif
+			return normalized;
+		}
+		
+		/// <summary>
+		/// Checks if two paths match or are contained within each other
+		/// </summary>
+		private static bool IsPathMatch(string workspacePath, string targetPath) {
+			if (string.IsNullOrEmpty(workspacePath) || string.IsNullOrEmpty(targetPath))
+				return false;
+				
+			return string.Equals(workspacePath, targetPath, StringComparison.OrdinalIgnoreCase) ||
+				   targetPath.StartsWith(workspacePath + "/", StringComparison.OrdinalIgnoreCase) ||
+				   workspacePath.StartsWith(targetPath + "/", StringComparison.OrdinalIgnoreCase);
 		}
 
 		public override bool Open(string path, int line, int column, string solution) {
@@ -514,6 +547,10 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 			var directory = IOPath.GetDirectoryName(solution);
 			var application = Path;
 
+			// PERFORMANCE FIX: Ensure Cursor Rules are accessible before opening
+			// This fixes the issue where Cursor Rules are not read on first Unity file opening
+			ProcessRunner.EnsureCursorRulesAccessible(directory);
+
 			var existingProcess = FindRunningCursorWithSolution(directory);
 			if (existingProcess != null) {
 				try {
@@ -521,7 +558,8 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 						$"--reuse-window \"{directory}\"" : 
 						$"--reuse-window -g \"{path}\":{line}:{column}";
 					
-					ProcessRunner.Start(ProcessStartInfoFor(application, args));
+					// Use async version for better performance
+					_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, args));
 					return true;
 				}
 				catch (Exception ex) {
@@ -533,7 +571,8 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 				$"--new-window \"{directory}\"" :
 				$"--new-window \"{directory}\" -g \"{path}\":{line}:{column}";
 			
-			ProcessRunner.Start(ProcessStartInfoFor(application, newArgs));
+			// Use async version for better performance
+			_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, newArgs));
 			return true;
 		}
 
