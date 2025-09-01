@@ -585,11 +585,13 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 			try
 			{
-				var cursorDir = Path.Combine(projectPath, ".cursor");
+				Debug.Log("Checking for Cursor rules in " + projectPath);
+				var cursorDir = Path.Combine(projectPath, ".cursor", "rules");
 				
 				// Fast directory existence check
 				if (!Directory.Exists(cursorDir))
 				{
+					Debug.Log("No Cursor rules found in " + projectPath);
 					// Cache negative result immediately
 					_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
 					return false;
