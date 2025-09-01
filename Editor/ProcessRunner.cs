@@ -553,11 +553,16 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			{
 				_processWorkspaceCache.Clear();
 				_directoryCache.Clear();
+				_cursorRulesCache.Clear();
 				_lastCacheCleanup = DateTime.UtcNow;
 				Debug.Log("[ProcessRunner] All caches cleared");
 			}
 		}
 		
+		// Cache for cursor rules detection to avoid repeated file system checks
+		private static readonly ConcurrentDictionary<string, (bool Found, DateTime CachedAt)> _cursorRulesCache = new ConcurrentDictionary<string, (bool, DateTime)>();
+		private const int RulesCacheExpiryMinutes = 2; // Cache rules detection for 2 minutes
+
 		/// <summary>
 		/// Optimized method to check if Cursor rules exist and are accessible
 		/// This helps fix the issue where Cursor Rules are not read on first Unity file opening
@@ -567,43 +572,121 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			if (string.IsNullOrWhiteSpace(projectPath))
 				return false;
 
+			// Check cache first for ultra-fast repeated calls
+			if (_cursorRulesCache.TryGetValue(projectPath, out var cached))
+			{
+				if (DateTime.UtcNow.Subtract(cached.CachedAt).TotalMinutes < RulesCacheExpiryMinutes)
+				{
+					return cached.Found;
+				}
+				// Remove expired cache entry
+				_cursorRulesCache.TryRemove(projectPath, out _);
+			}
+
 			try
 			{
-				// Common Cursor rules file locations
+				// Common Cursor rules file locations in order of priority (most common first for performance)
 				var cursorRulesFiles = new[] {
-					Path.Combine(projectPath, ".cursor"),
-					// Path.Combine(projectPath, ".cursorrules"),
-					// Path.Combine(projectPath, ".cursor", "rules"),
-					// Path.Combine(projectPath, ".vscode", "cursor-rules.md"),
-					// Path.Combine(projectPath, "cursor-rules.md")
+					Path.Combine(projectPath, ".cursorrules"),                    // Standard .cursorrules file
+					Path.Combine(projectPath, "cursor-rules.md"),                // Markdown rules file
+					Path.Combine(projectPath, ".cursor", "rules"),               // Rules in .cursor directory
+					Path.Combine(projectPath, ".cursor", "rules.md"),            // Markdown rules in .cursor directory
+					Path.Combine(projectPath, ".vscode", "cursor-rules.md"),     // VSCode directory rules
+					Path.Combine(projectPath, ".vscode", ".cursorrules"),        // VSCode directory rules (alt)
+					Path.Combine(projectPath, ".cursor-rules"),                  // Alternative naming
+					Path.Combine(projectPath, "rules.md"),                       // Simple rules.md
+					Path.Combine(projectPath, ".cursor")                         // Legacy: .cursor as file (least likely)
 				};
+
+				bool foundAny = false;
+
+				// Fast sequential check - often the first file exists, so parallel overhead isn't worth it for small lists
 				foreach (var rulesFile in cursorRulesFiles)
 				{
-					if (File.Exists(rulesFile))
+					try
 					{
-						Debug.Log($"[ProcessRunner] Found Cursor rules file: {rulesFile}");
-						
-						// Touch the file to update its timestamp and ensure it's accessible
-						try
+						if (File.Exists(rulesFile))
 						{
+							// Only log in debug builds to improve performance
+							#if UNITY_EDITOR && DEBUG
+							Debug.Log($"[ProcessRunner] Found Cursor rules file: {rulesFile}");
+							#endif
+							
+							// Touch the file to update its timestamp and ensure it's accessible
 							File.SetLastAccessTime(rulesFile, DateTime.Now);
-							return true;
-						}
-						catch (Exception ex)
-						{
-							Debug.LogWarning($"[ProcessRunner] Could not access Cursor rules file '{rulesFile}': {ex.Message}");
+							foundAny = true;
+							break; // Found one, that's enough
 						}
 					}
+					catch (Exception ex)
+					{
+						Debug.LogWarning($"[ProcessRunner] Could not access Cursor rules file '{rulesFile}': {ex.Message}");
+					}
 				}
+
+				if (!foundAny)
+				{
+					Debug.Log($"[ProcessRunner] No Cursor rules files found in project: {projectPath}");
+				}
+
+				// Cache the result
+				_cursorRulesCache[projectPath] = (foundAny, DateTime.UtcNow);
 				
-				Debug.Log($"[ProcessRunner] No Cursor rules files found in project: {projectPath}");
-				return false;
+				return foundAny;
 			}
 			catch (Exception ex)
 			{
 				Debug.LogError($"[ProcessRunner] Error checking Cursor rules accessibility: {ex.Message}");
+				
+				// Cache negative result to avoid repeated failures
+				_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
 				return false;
 			}
 		}
+
+		/// <summary>
+		/// Async version of EnsureCursorRulesAccessible for non-blocking UI operations
+		/// </summary>
+		public static async Task<bool> EnsureCursorRulesAccessibleAsync(string projectPath)
+		{
+			if (string.IsNullOrWhiteSpace(projectPath))
+				return false;
+
+			// Check cache first
+			if (_cursorRulesCache.TryGetValue(projectPath, out var cached))
+			{
+				if (DateTime.UtcNow.Subtract(cached.CachedAt).TotalMinutes < RulesCacheExpiryMinutes)
+				{
+					return cached.Found;
+				}
+			}
+
+			return await Task.Run(() => EnsureCursorRulesAccessible(projectPath)).ConfigureAwait(false);
+		}
+
+		#if UNITY_EDITOR && DEBUG
+		/// <summary>
+		/// Test method to verify cursor rules detection is working
+		/// </summary>
+		[UnityEditor.MenuItem("Tools/Test Cursor Rules Detection")]
+		public static void TestCursorRulesDetection()
+		{
+			var projectPath = System.IO.Directory.GetCurrentDirectory();
+			Debug.Log($"[ProcessRunner] Testing cursor rules detection in: {projectPath}");
+			
+			var result = EnsureCursorRulesAccessible(projectPath);
+			Debug.Log($"[ProcessRunner] Cursor rules detection result: {result}");
+			
+			// Test async version
+			_ = TestCursorRulesDetectionAsync();
+		}
+
+		private static async Task TestCursorRulesDetectionAsync()
+		{
+			var projectPath = System.IO.Directory.GetCurrentDirectory();
+			var result = await EnsureCursorRulesAccessibleAsync(projectPath);
+			Debug.Log($"[ProcessRunner] Async cursor rules detection result: {result}");
+		}
+		#endif
 	}
 }
