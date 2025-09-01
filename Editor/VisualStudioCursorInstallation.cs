@@ -549,7 +549,7 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 
 			// PERFORMANCE FIX: Ensure Cursor Rules are accessible before opening
 			// This fixes the issue where Cursor Rules are not read on first Unity file opening
-			// Now supports all common cursor rules file locations: .cursorrules, cursor-rules.md, .cursor/rules, etc.
+			// Checks for .md files in PROJECT_PATH\.cursor\ directory
 			ProcessRunner.EnsureCursorRulesAccessible(directory);
 
 			var existingProcess = FindRunningCursorWithSolution(directory);

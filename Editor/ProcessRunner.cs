@@ -30,17 +30,17 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 	internal static class ProcessRunner
 	{
-		public const int DefaultTimeoutInMilliseconds = 60000; // Reduced from 5 minutes to 1 minute for faster responsiveness
-		private const int FastTimeoutInMilliseconds = 10000; // 10 seconds for quick operations
-		private const int WorkspaceDiscoveryTimeoutInMilliseconds = 5000; // 5 seconds for workspace discovery
+		public const int DefaultTimeoutInMilliseconds = 30000; // 30 seconds for optimal responsiveness
+		private const int FastTimeoutInMilliseconds = 5000; // 5 seconds for quick operations
+		private const int WorkspaceDiscoveryTimeoutInMilliseconds = 3000; // 3 seconds for workspace discovery
 		
 		// High-performance caching for workspace discovery
 		private static readonly ConcurrentDictionary<int, CachedWorkspaceInfo> _processWorkspaceCache = new ConcurrentDictionary<int, CachedWorkspaceInfo>();
 		private static readonly ConcurrentDictionary<string, DateTime> _directoryCache = new ConcurrentDictionary<string, DateTime>();
 		private static readonly object _cacheLock = new object();
 		private static DateTime _lastCacheCleanup = DateTime.UtcNow;
-		private const int CacheExpiryMinutes = 5; // Cache expires after 5 minutes
-		private const int CacheCleanupIntervalMinutes = 10; // Cleanup cache every 10 minutes
+		private const int CacheExpiryMinutes = 10; // Cache expires after 10 minutes (longer for better performance)
+		private const int CacheCleanupIntervalMinutes = 15; // Cleanup cache every 15 minutes
 		
 		private class CachedWorkspaceInfo
 		{
@@ -372,7 +372,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				}
 				
 				_lastCacheCleanup = DateTime.UtcNow;
-				Debug.Log($"[ProcessRunner] Cache cleanup completed. Removed {expiredKeys.Count} process cache entries and {expiredDirKeys.Count} directory cache entries.");
+				// Cache cleanup completed silently
 			}
 		}
 
@@ -388,7 +388,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			var processId = process.Id;
 			if (_processWorkspaceCache.TryGetValue(processId, out var cachedInfo) && cachedInfo.IsValid)
 			{
-				Debug.Log($"[ProcessRunner] Using cached workspaces for process {processId}");
+				// Using cached workspaces
 				return cachedInfo.Workspaces;
 			}
 
@@ -400,8 +400,6 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				var workspaces = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // Use HashSet for better performance
 				var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 				string cursorStoragePath = GetCursorStoragePath(userProfile);
-				
-				// Debug.Log($"[ProcessRunner] Scanning workspaces in: {cursorStoragePath}"); // Commented to reduce console spam
 				
 				// Check directory cache to avoid repeated directory existence checks
 				if (!_directoryCache.ContainsKey(cursorStoragePath))
@@ -415,13 +413,16 @@ namespace Microsoft.Unity.VisualStudio.Editor
 					}
 				}
 
-				// Use parallel processing for faster directory scanning
+				// Use parallel processing for faster directory scanning (optimized)
 				var workspaceDirs = Directory.GetDirectories(cursorStoragePath);
 				var workspaceResults = new ConcurrentBag<string>();
 				
+				// Limit parallelism to avoid thread overhead for small numbers of directories
+				var maxParallelism = Math.Min(Environment.ProcessorCount, Math.Max(1, workspaceDirs.Length / 4));
+				
 				Parallel.ForEach(workspaceDirs, new ParallelOptions 
 				{ 
-					MaxDegreeOfParallelism = Environment.ProcessorCount 
+					MaxDegreeOfParallelism = maxParallelism
 				}, workspaceDir =>
 				{
 					try
@@ -453,7 +454,6 @@ namespace Microsoft.Unity.VisualStudio.Editor
 					CachedAt = DateTime.UtcNow
 				};
 				
-				// Debug.Log($"[ProcessRunner] Found {result.Length} workspaces for process {processId}"); // Commented to reduce console spam
 				return result;
 			}
 			catch (Exception ex)
@@ -475,7 +475,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			var processId = process.Id;
 			if (_processWorkspaceCache.TryGetValue(processId, out var cachedInfo) && cachedInfo.IsValid)
 			{
-				Debug.Log($"[ProcessRunner] Using cached workspaces for process {processId}");
+				// Using cached workspaces
 				return cachedInfo.Workspaces;
 			}
 
@@ -555,13 +555,13 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				_directoryCache.Clear();
 				_cursorRulesCache.Clear();
 				_lastCacheCleanup = DateTime.UtcNow;
-				Debug.Log("[ProcessRunner] All caches cleared");
+				// All caches cleared
 			}
 		}
 		
-		// Cache for cursor rules detection to avoid repeated file system checks
+		// High-performance cache for cursor rules detection
 		private static readonly ConcurrentDictionary<string, (bool Found, DateTime CachedAt)> _cursorRulesCache = new ConcurrentDictionary<string, (bool, DateTime)>();
-		private const int RulesCacheExpiryMinutes = 2; // Cache rules detection for 2 minutes
+		private const int RulesCacheExpiryMinutes = 5; // Cache rules detection for 5 minutes (longer for better performance)
 
 		/// <summary>
 		/// Optimized method to check if Cursor rules exist and are accessible
@@ -585,59 +585,46 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 			try
 			{
-				// Common Cursor rules file locations in order of priority (most common first for performance)
-				var cursorRulesFiles = new[] {
-					Path.Combine(projectPath, ".cursorrules"),                    // Standard .cursorrules file
-					Path.Combine(projectPath, "cursor-rules.md"),                // Markdown rules file
-					Path.Combine(projectPath, ".cursor", "rules"),               // Rules in .cursor directory
-					Path.Combine(projectPath, ".cursor", "rules.md"),            // Markdown rules in .cursor directory
-					Path.Combine(projectPath, ".vscode", "cursor-rules.md"),     // VSCode directory rules
-					Path.Combine(projectPath, ".vscode", ".cursorrules"),        // VSCode directory rules (alt)
-					Path.Combine(projectPath, ".cursor-rules"),                  // Alternative naming
-					Path.Combine(projectPath, "rules.md"),                       // Simple rules.md
-					Path.Combine(projectPath, ".cursor")                         // Legacy: .cursor as file (least likely)
-				};
-
-				bool foundAny = false;
-
-				// Fast sequential check - often the first file exists, so parallel overhead isn't worth it for small lists
-				foreach (var rulesFile in cursorRulesFiles)
-				{
-					try
-					{
-						if (File.Exists(rulesFile))
-						{
-							// Only log in debug builds to improve performance
-							#if UNITY_EDITOR && DEBUG
-							Debug.Log($"[ProcessRunner] Found Cursor rules file: {rulesFile}");
-							#endif
-							
-							// Touch the file to update its timestamp and ensure it's accessible
-							File.SetLastAccessTime(rulesFile, DateTime.Now);
-							foundAny = true;
-							break; // Found one, that's enough
-						}
-					}
-					catch (Exception ex)
-					{
-						Debug.LogWarning($"[ProcessRunner] Could not access Cursor rules file '{rulesFile}': {ex.Message}");
-					}
-				}
-
-				if (!foundAny)
-				{
-					Debug.Log($"[ProcessRunner] No Cursor rules files found in project: {projectPath}");
-				}
-
-				// Cache the result
-				_cursorRulesCache[projectPath] = (foundAny, DateTime.UtcNow);
+				var cursorDir = Path.Combine(projectPath, ".cursor");
 				
-				return foundAny;
+				// Fast directory existence check
+				if (!Directory.Exists(cursorDir))
+				{
+					// Cache negative result immediately
+					_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
+					return false;
+				}
+
+				try
+				{
+					// Ultra-fast check: just see if any .md file exists
+					var mdFiles = Directory.EnumerateFiles(cursorDir, "*.md", SearchOption.TopDirectoryOnly);
+					var firstMdFile = mdFiles.FirstOrDefault();
+					
+					if (firstMdFile != null)
+					{
+						// Touch the file to ensure it's accessible (async to not block)
+						Task.Run(() => {
+							try { File.SetLastAccessTime(firstMdFile, DateTime.Now); }
+							catch { /* Ignore touch errors */ }
+						});
+						
+						// Cache positive result
+						_cursorRulesCache[projectPath] = (true, DateTime.UtcNow);
+						return true;
+					}
+				}
+				catch
+				{
+					// Silently handle any file system errors
+				}
+
+				// Cache negative result
+				_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
+				return false;
 			}
 			catch (Exception ex)
 			{
-				Debug.LogError($"[ProcessRunner] Error checking Cursor rules accessibility: {ex.Message}");
-				
 				// Cache negative result to avoid repeated failures
 				_cursorRulesCache[projectPath] = (false, DateTime.UtcNow);
 				return false;
@@ -645,14 +632,14 @@ namespace Microsoft.Unity.VisualStudio.Editor
 		}
 
 		/// <summary>
-		/// Async version of EnsureCursorRulesAccessible for non-blocking UI operations
+		/// High-performance async version of EnsureCursorRulesAccessible for non-blocking UI operations
 		/// </summary>
 		public static async Task<bool> EnsureCursorRulesAccessibleAsync(string projectPath)
 		{
 			if (string.IsNullOrWhiteSpace(projectPath))
 				return false;
 
-			// Check cache first
+			// Check cache first (ultra-fast path)
 			if (_cursorRulesCache.TryGetValue(projectPath, out var cached))
 			{
 				if (DateTime.UtcNow.Subtract(cached.CachedAt).TotalMinutes < RulesCacheExpiryMinutes)
@@ -661,32 +648,8 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				}
 			}
 
+			// Use ConfigureAwait(false) for better performance in non-UI contexts
 			return await Task.Run(() => EnsureCursorRulesAccessible(projectPath)).ConfigureAwait(false);
 		}
-
-		#if UNITY_EDITOR && DEBUG
-		/// <summary>
-		/// Test method to verify cursor rules detection is working
-		/// </summary>
-		[UnityEditor.MenuItem("Tools/Test Cursor Rules Detection")]
-		public static void TestCursorRulesDetection()
-		{
-			var projectPath = System.IO.Directory.GetCurrentDirectory();
-			Debug.Log($"[ProcessRunner] Testing cursor rules detection in: {projectPath}");
-			
-			var result = EnsureCursorRulesAccessible(projectPath);
-			Debug.Log($"[ProcessRunner] Cursor rules detection result: {result}");
-			
-			// Test async version
-			_ = TestCursorRulesDetectionAsync();
-		}
-
-		private static async Task TestCursorRulesDetectionAsync()
-		{
-			var projectPath = System.IO.Directory.GetCurrentDirectory();
-			var result = await EnsureCursorRulesAccessibleAsync(projectPath);
-			Debug.Log($"[ProcessRunner] Async cursor rules detection result: {result}");
-		}
-		#endif
 	}
 }
