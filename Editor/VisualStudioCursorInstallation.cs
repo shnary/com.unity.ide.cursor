@@ -557,7 +557,7 @@ namespace Microsoft.Unity.VisualStudio.Editor {
 					// Found matching workspace - reuse the window
 					var args = string.IsNullOrEmpty(path) ? 
 						$"--reuse-window \"{directory}\"" : 
-						$"--reuse-window -g \"{path}\":{line}:{column}";
+						$"--reuse-window \"{directory}\" -g \"{path}\":{line}:{column}";
 					
 					_ = ProcessRunner.StartAsync(ProcessStartInfoFor(application, args));
 					return true;
