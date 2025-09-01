@@ -1,0 +1,12 @@
+Unity IDE Cursor Integration Rules:
+
+1. This is a Unity package for Cursor IDE integration
+2. The main functionality is in the Editor/ directory
+3. ProcessRunner.cs handles process discovery and workspace management
+4. VisualStudioCursorInstallation.cs manages Cursor installation detection
+5. Package follows Unity Package Manager conventions
+6. Uses C# with Unity-specific APIs
+7. Logging should be minimal to avoid console spam
+8. Caching is implemented for performance optimization
+9. Always maintain compatibility with Unity 2019.4+
+10. Follow Microsoft coding standards for consistency

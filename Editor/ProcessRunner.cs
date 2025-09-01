@@ -401,7 +401,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 				string cursorStoragePath = GetCursorStoragePath(userProfile);
 				
-				Debug.Log($"[ProcessRunner] Scanning workspaces in: {cursorStoragePath}");
+				// Debug.Log($"[ProcessRunner] Scanning workspaces in: {cursorStoragePath}"); // Commented to reduce console spam
 				
 				// Check directory cache to avoid repeated directory existence checks
 				if (!_directoryCache.ContainsKey(cursorStoragePath))
@@ -453,7 +453,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 					CachedAt = DateTime.UtcNow
 				};
 				
-				Debug.Log($"[ProcessRunner] Found {result.Length} workspaces for process {processId}");
+				// Debug.Log($"[ProcessRunner] Found {result.Length} workspaces for process {processId}"); // Commented to reduce console spam
 				return result;
 			}
 			catch (Exception ex)
